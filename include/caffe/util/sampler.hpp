@@ -13,6 +13,9 @@ namespace caffe {
 void GroupObjectBBoxes(const AnnotatedDatum& anno_datum,
                        vector<NormalizedBBox>* object_bboxes);
 
+void GroupObjectBBoxes_RRS(const AnnotatedDatum& anno_datum,
+                       vector<NormalizedBBox>* object_bboxes, pair<float,float>* sizes);
+
 // Check if a sampled bbox satisfy the constraints with all object bboxes.
 bool SatisfySampleConstraint(const NormalizedBBox& sampled_bbox,
                              const vector<NormalizedBBox>& object_bboxes,
@@ -21,9 +24,17 @@ bool SatisfySampleConstraint(const NormalizedBBox& sampled_bbox,
 // Sample a NormalizedBBox given the specifictions.
 void SampleBBox(const Sampler& sampler, NormalizedBBox* sampled_bbox);
 
+void SampleBBox_RRS(const Sampler& sampler, NormalizedBBox* sampled_bbox, const pair<float,float>& sizes, const BatchSampler& batch_sampler);
+
 // Generate samples from NormalizedBBox using the BatchSampler.
 void GenerateSamples(const NormalizedBBox& source_bbox,
                      const vector<NormalizedBBox>& object_bboxes,
+                     const BatchSampler& batch_sampler,
+                     vector<NormalizedBBox>* sampled_bboxes);
+
+void GenerateSamples_RRS(const NormalizedBBox& source_bbox,
+                     const vector<NormalizedBBox>& object_bboxes,
+                     const pair<float, float>& img_sizes,
                      const BatchSampler& batch_sampler,
                      vector<NormalizedBBox>* sampled_bboxes);
 

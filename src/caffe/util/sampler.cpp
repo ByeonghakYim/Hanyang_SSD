@@ -146,7 +146,9 @@ void GenerateBatchSamples(const AnnotatedDatum& anno_datum,
                           vector<NormalizedBBox>* sampled_bboxes) {
   sampled_bboxes->clear();
   vector<NormalizedBBox> object_bboxes;
-  GroupObjectBBoxes(anno_datum, &object_bboxes);
+  pair<float, float> img_sizes;
+  
+  GroupObjectBBoxes_RRS(anno_datum, &object_bboxes, &img_sizes);
   for (int i = 0; i < batch_samplers.size(); ++i) {
     if (batch_samplers[i].use_original_image()) {
       NormalizedBBox unit_bbox;
@@ -154,8 +156,122 @@ void GenerateBatchSamples(const AnnotatedDatum& anno_datum,
       unit_bbox.set_ymin(0);
       unit_bbox.set_xmax(1);
       unit_bbox.set_ymax(1);
-      GenerateSamples(unit_bbox, object_bboxes, batch_samplers[i],
+      GenerateSamples_RRS(unit_bbox, object_bboxes, img_sizes, batch_samplers[i],
                       sampled_bboxes);
+    }
+  }
+}
+
+void GroupObjectBBoxes_RRS(const AnnotatedDatum& anno_datum,
+                       vector<NormalizedBBox>* object_bboxes, pair<float,float>* sizes) {
+#ifdef USE_OPENCV
+    cv::Mat cv_img;
+    cv_img = DecodeDatumToCVMatNative(anno_datum.datum());
+    sizes->first = (float)cv_img.cols;
+    sizes->second = (float)cv_img.rows;
+#else
+    LOG(FATAL) << "Encoded datum requires OpenCV; compile with USE_OPENCV.";
+#endif  // USE_OPENCV
+
+  object_bboxes->clear();
+
+  for (int i = 0; i < anno_datum.annotation_group_size(); ++i) {
+    const AnnotationGroup& anno_group = anno_datum.annotation_group(i);
+
+    for (int j = 0; j < anno_group.annotation_size(); ++j) {
+      const Annotation& anno = anno_group.annotation(j);
+      object_bboxes->push_back(anno.bbox());
+    }
+  }
+}
+
+void SampleBBox_RRS(const Sampler& sampler, NormalizedBBox* sampled_bbox, const pair<float,float>& sizes, const BatchSampler& batch_sampler) {
+  // Get random scale.
+  CHECK_GE(sampler.max_scale(), sampler.min_scale());
+  CHECK_GT(sampler.min_scale(), 0.);
+  CHECK_LE(sampler.max_scale(), 1.);
+  float scale;
+  caffe_rng_uniform(1, sampler.min_scale(), sampler.max_scale(), &scale);
+
+  float aspect_ratio;
+  int standard_width = 1280;
+  int standard_height = 720;
+
+  float bbox_width = 0.;
+  float bbox_height = 0.;
+
+  if(!(batch_sampler.merged_data())){
+    // Get random aspect ratio.
+    CHECK_GE(sampler.max_aspect_ratio(), sampler.min_aspect_ratio());
+    CHECK_GT(sampler.min_aspect_ratio(), 0.);
+    CHECK_LT(sampler.max_aspect_ratio(), FLT_MAX);
+    //float aspect_ratio;
+    float min_aspect_ratio = std::max<float>(sampler.min_aspect_ratio(),
+                                             std::pow(scale, 2.));
+    float max_aspect_ratio = std::min<float>(sampler.max_aspect_ratio(),
+                                             1 / std::pow(scale, 2.));
+    caffe_rng_uniform(1, min_aspect_ratio, max_aspect_ratio, &aspect_ratio);
+  }
+
+  float input_aspect_ratio = sizes.first/(float)sizes.second;
+  float standard_aspect_ratio = standard_width/(float)standard_height;
+
+  if(batch_sampler.merged_data()){  
+    if (input_aspect_ratio > standard_aspect_ratio){
+      bbox_width = std::min<float>((standard_width/(float)sizes.first)*scale, 1);
+      bbox_height = std::min<float>(scale, 1);
+    }
+    else{
+      bbox_width = std::min<float>(scale, 1);
+      bbox_height = std::min<float>((standard_height/(float)sizes.second)*scale, 1);
+    }
+
+    if (sizes.first >= 1280)
+    {
+      caffe_rng_uniform(1, sampler.max_scale() * (float)0.8, sampler.max_scale(), &scale);
+      bbox_width = std::min<float>(scale, 1);
+      bbox_height = std::min<float>((standard_height/(float)sizes.second)*scale, 1);
+    }
+  }
+  else{
+    bbox_width = scale * sqrt(aspect_ratio);
+    bbox_height = scale / sqrt(aspect_ratio);
+  }
+
+  // Figure out top left coordinates.
+  float w_off, h_off;
+  caffe_rng_uniform(1, 0.f, 1 - bbox_width, &w_off);
+  caffe_rng_uniform(1, 0.f, 1 - bbox_height, &h_off);
+  sampled_bbox->set_xmin(w_off);
+  sampled_bbox->set_ymin(h_off);
+  sampled_bbox->set_xmax(w_off + bbox_width);
+  sampled_bbox->set_ymax(h_off + bbox_height);
+}
+
+
+void GenerateSamples_RRS(const NormalizedBBox& source_bbox,
+                     const vector<NormalizedBBox>& object_bboxes,
+                     const pair<float, float>& img_sizes,
+                     const BatchSampler& batch_sampler,
+                     vector<NormalizedBBox>* sampled_bboxes) {
+  int found = 0;
+
+  for (int i = 0; i < batch_sampler.max_trials(); ++i) {
+    if (batch_sampler.has_max_sample() &&
+        found >= batch_sampler.max_sample()) {
+      break;
+    }
+
+    // Generate sampled_bbox in the normalized space [0, 1].
+    NormalizedBBox sampled_bbox;
+    SampleBBox_RRS(batch_sampler.sampler(), &sampled_bbox, img_sizes, batch_sampler);
+    // Transform the sampled_bbox w.r.t. source_bbox.
+    LocateBBox(source_bbox, sampled_bbox, &sampled_bbox);
+    // Determine if the sampled bbox is positive or negative by the constraint.
+    if (SatisfySampleConstraint(sampled_bbox, object_bboxes,
+                                batch_sampler.sample_constraint())) {
+      ++found;
+      sampled_bboxes->push_back(sampled_bbox);
     }
   }
 }

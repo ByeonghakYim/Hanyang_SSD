@@ -103,6 +103,8 @@ message BatchSampler {
 
   // Maximum number of trials for sampling to avoid infinite loop.
   optional uint32 max_trials = 5 [default = 100];
+
+  optional bool merged_data = 6 [default = false];
 }
 
 // Condition for emitting annotations.
